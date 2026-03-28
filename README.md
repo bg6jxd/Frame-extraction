@@ -1,4 +1,156 @@
-# VideoFrame - 监控视频抽帧管理工具
+# VideoFrame - Surveillance Video Frame Extraction Tool
+
+[中文文档](#中文文档) | [English Documentation](#english-documentation)
+
+---
+
+# English Documentation
+
+🎬 **VideoFrame** is a professional surveillance video frame extraction management tool designed to extract frames from massive surveillance video archives based on time rules and compose them into timelapse videos.
+
+## Features
+
+- 📁 **Video Index Management** - Scan and index video files, parse filenames to extract time information
+- ⏱️ **Time-based Frame Extraction** - Extract frames by date range, daily time period, and interval
+- 🚀 **Multi-threaded Parallel Processing** - Support for multi-threaded parallel extraction, significantly improving processing speed
+- 🎬 **Video Composition** - Compose extracted frames into timelapse videos
+- 🖥️ **Graphical Interface** - Modern GUI based on PyQt5
+- 💻 **CLI Support** - Complete command-line interface
+
+## Supported Video File Formats
+
+Automatically parses the following camera filename formats:
+
+| Brand | Filename Format Example |
+|-------|-------------------------|
+| Xiaomi | `00_20260327121712_20260327122218.mp4` |
+| Hikvision | `ch01_20260327121712.mp4` |
+| Dahua | `DH20260327121712.mp4` |
+
+## System Requirements
+
+- Python 3.10+
+- FFmpeg (for video processing)
+
+### Installing FFmpeg
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt install ffmpeg
+
+# Windows
+# Download from https://ffmpeg.org and add to PATH
+```
+
+## Installation
+
+### Install from Source
+
+```bash
+# Clone repository
+git clone https://github.com/bg6jxd/Frame-extraction.git
+cd "Frame extraction"
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Graphical Interface (Recommended)
+
+```bash
+python run_gui.py
+```
+
+### Command Line Interface
+
+```bash
+# Initialize index
+videoframe init
+
+# Scan video files
+videoframe scan /path/to/videos
+
+# Extract frames
+videoframe extract --start-date 2026-03-19 --end-date 2026-03-27 --interval 120
+
+# Compose video
+videoframe compose /path/to/frames -o output.mp4
+```
+
+## GUI Interface Guide
+
+### Video Index
+- Select video directory
+- Scan and index video files
+- Quick scan mode (parse filenames only, no video content reading)
+
+### Frame Extraction Settings
+- Set date range (automatically constrained by video time range)
+- Set daily time period
+- Set extraction interval
+- Set output format and quality
+
+### Video Composition
+- Select frame directory
+- Set frame rate, resolution
+- Select video encoder (H.264/H.265/VP9/AV1)
+
+### Operation Log
+- View operation logs
+
+## Project Structure
+
+```
+videoframe/
+├── cli/                 # Command line interface
+│   └── main.py
+├── core/                # Core modules
+│   ├── composition/     # Video composition
+│   ├── extraction/      # Frame extraction
+│   ├── index/           # Index management
+│   └── metadata/        # Metadata extraction
+├── models/              # Data models
+├── utils/               # Utility functions
+└── gui_pyqt.py          # PyQt5 GUI
+```
+
+## Build Standalone Application
+
+### macOS / Linux
+
+```bash
+chmod +x build.sh
+./build.sh
+```
+
+Output:
+- macOS: `dist/VideoFrame.app`
+- Linux: `dist/VideoFrame`
+
+### Windows
+
+```cmd
+build.bat
+```
+
+Output: `dist\VideoFrame.exe`
+
+## Configuration
+
+Configuration file located at `videoframe/config/default.yaml`, customize default parameters.
+
+## License
+
+MIT License
+
+---
+
+# 中文文档
 
 🎬 **VideoFrame** 是一个专业的监控视频抽帧管理工具，用于从海量监控视频中按照时间规则提取帧图像，并合成为延时视频。
 
@@ -45,7 +197,7 @@ sudo apt install ffmpeg
 
 ```bash
 # 克隆仓库
-git clone <repository-url>
+git clone https://github.com/bg6jxd/Frame-extraction.git
 cd "Frame extraction"
 
 # 安装依赖
