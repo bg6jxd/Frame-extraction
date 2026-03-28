@@ -1,0 +1,31 @@
+general:
+  default_output_dir: "./output"
+  temp_dir: "/tmp/videoframe"
+  log_level: "INFO"
+  log_file: "~/.videoframe/logs/app.log"
+
+database:
+  path: "~/.videoframe/index.db"
+  backup_interval: "1h"
+
+processing:
+  max_workers: 4
+  chunk_size: 100
+  memory_limit: "2GB"
+
+video_processing:
+  default_fps: 30
+  default_resolution: "1920x1080"
+  default_codec: "h264"
+  default_quality: 95
+
+file_naming:
+  patterns:
+    xiaomi: "(\d{2})_(\d{14})_(\d{14})\.(mp4|avi|mov)"
+    hikvision: "(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})"
+    dahua: "(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})"
+
+output:
+  frame_format: "jpg"
+  frame_quality: 95
+  naming_template: "{date}_{time}_{camera_id}_{frame:06d}"

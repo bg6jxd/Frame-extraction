@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "videoframe"
+version = "1.0.0"
+description = "监控视频抽帧管理工具 - 用于从海量监控视频中按规则提取帧并合成延时摄影视频"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "VideoFrame Team"}
+]
+keywords = ["video", "surveillance", "timelapse", "frame-extraction"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "click>=8.0.0",
+    "pyyaml>=6.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+videoframe = "videoframe.cli.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/videoframe/videoframe"
+Documentation = "https://github.com/videoframe/videoframe#readme"
+Repository = "https://github.com/videoframe/videoframe"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["videoframe*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
