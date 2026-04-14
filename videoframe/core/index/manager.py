@@ -91,7 +91,7 @@ class VideoIndexManager:
             recursive: 是否递归扫描子目录
             pattern: 文件名匹配模式
             force_rebuild: 是否强制重建索引
-            progress_callback: 进度回调函数
+            progress_callback: 进度回调函数 (video_file, scan_result)
             quick_mode: 快速模式，仅解析文件名，不读取文件内容
         """
         
@@ -101,32 +101,47 @@ class VideoIndexManager:
             logger.info("Force rebuild index, clearing existing data...")
             self.db.clear_all()
         
-        # 使用扫描器的批量扫描方法
-        scan_result = self.scanner.scan_directory_batch(
-            directory,
-            recursive=recursive,
-            pattern=pattern,
-            progress_callback=progress_callback,
-            quick_mode=quick_mode
-        )
+        # 只收集一次视频文件列表
+        video_files = self.scanner._collect_video_files(directory, recursive, pattern)
+        result.total_videos = len(video_files)
         
-        result.total_videos = scan_result.video_files
-        result.failed = scan_result.failed
-        result.errors = scan_result.errors
+        # 逐个提取元数据并批量插入数据库
+        videos = []
+        for i, file_path in enumerate(video_files):
+            try:
+                abs_path = str(file_path)
+                if quick_mode:
+                    video = self.scanner.metadata_extractor.quick_extract(abs_path)
+                else:
+                    video = self.scanner.metadata_extractor.extract(abs_path)
+                
+                videos.append(video)
+                result.indexed += 1
+                
+                # 实时进度回调
+                if progress_callback:
+                    # 创建一个临时 ScanResult 用于进度报告
+                    temp_result = ScanResult()
+                    temp_result.video_files = result.total_videos
+                    temp_result.successful = result.indexed
+                    temp_result.failed = result.failed
+                    progress_callback(video, temp_result)
+                
+                # 每 BATCH_SIZE 个文件批量插入一次
+                if len(videos) >= self.BATCH_SIZE:
+                    success, failed = self.db.insert_videos_batch(videos)
+                    result.indexed = result.indexed  # 已在上文计数
+                    result.failed += failed
+                    videos = []  # 清空缓存
+                    
+            except Exception as e:
+                result.failed += 1
+                result.errors.append(f"{file_path}: {str(e)}")
+                logger.error(f"Failed to extract metadata from {file_path}: {e}")
         
-        # 收集所有扫描到的视频并批量插入
-        videos = list(self.scanner.scan_directory(
-            directory,
-            recursive=recursive,
-            pattern=pattern,
-            quick_mode=quick_mode
-        ))
-        
-        # 批量插入
-        for i in range(0, len(videos), self.BATCH_SIZE):
-            batch = videos[i:i + self.BATCH_SIZE]
-            success, failed = self.db.insert_videos_batch(batch)
-            result.indexed += success
+        # 插入剩余的视频
+        if videos:
+            success, failed = self.db.insert_videos_batch(videos)
             result.failed += failed
         
         logger.info(f"Index completed: {result.indexed}/{result.total_videos} videos indexed")

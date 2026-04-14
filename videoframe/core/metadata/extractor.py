@@ -2,6 +2,7 @@
 元数据解析模块
 """
 import re
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -157,9 +158,18 @@ class MetadataExtractor:
                 file_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=30,
+                check=False
+            )
             
-            import json
+            if result.returncode != 0:
+                logger.warning(f"FFprobe returned non-zero exit code: {result.returncode}")
+                return None
+            
             data = json.loads(result.stdout)
             
             metadata = {}
@@ -187,6 +197,12 @@ class MetadataExtractor:
             
             return metadata
         
+        except subprocess.TimeoutExpired:
+            logger.error(f"FFprobe timeout for file: {file_path}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.error(f"FFprobe JSON parse error: {e}")
+            return None
         except Exception as e:
             logger.error(f"FFprobe error: {e}")
             return None

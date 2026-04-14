@@ -37,10 +37,10 @@ def generate_task_id() -> str:
 
 
 def calculate_file_hash(file_path: str) -> str:
-    """计算文件哈希值"""
-    hasher = hashlib.md5()
+    """计算文件哈希值（使用SHA256）"""
+    hasher = hashlib.sha256()
     with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(4096), b''):
+        for chunk in iter(lambda: f.read(8192), b''):
             hasher.update(chunk)
     return hasher.hexdigest()
 

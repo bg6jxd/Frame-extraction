@@ -118,7 +118,7 @@ class Database:
         return cursor.lastrowid or 0
     
     def insert_videos_batch(self, videos: List[VideoFile]) -> Tuple[int, int]:
-        """批量插入视频记录
+        """批量插入视频记录（使用事务提升性能）
         
         Returns:
             (成功数量, 失败数量)
@@ -131,8 +131,11 @@ class Database:
         success = 0
         failed = 0
         
-        for video in videos:
-            try:
+        # 使用事务批量处理，避免每次插入都commit
+        try:
+            cursor.execute('BEGIN TRANSACTION')
+            
+            for video in videos:
                 cursor.execute('''
                     INSERT OR REPLACE INTO video_files 
                     (file_path, file_name, file_size, start_time, end_time, 
@@ -157,11 +160,43 @@ class Database:
                     video.updated_at.isoformat() if video.updated_at else None,
                 ))
                 success += 1
-            except Exception as e:
-                failed += 1
-                logger.error(f"Batch insert failed for {video.file_path}: {e}")
+            
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            # 回退到逐条插入模式
+            logger.warning(f"Batch transaction failed, falling back to individual inserts: {e}")
+            for video in videos:
+                try:
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO video_files 
+                        (file_path, file_name, file_size, start_time, end_time, 
+                         duration_seconds, fps, resolution_width, resolution_height, 
+                         codec, bitrate, camera_id, index_status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        video.file_path,
+                        video.file_name,
+                        video.file_size,
+                        video.start_time.isoformat() if video.start_time else None,
+                        video.end_time.isoformat() if video.end_time else None,
+                        video.duration_seconds,
+                        video.fps,
+                        video.resolution_width,
+                        video.resolution_height,
+                        video.codec,
+                        video.bitrate,
+                        video.camera_id,
+                        video.index_status.value,
+                        video.created_at.isoformat() if video.created_at else None,
+                        video.updated_at.isoformat() if video.updated_at else None,
+                    ))
+                    success += 1
+                    conn.commit()
+                except Exception as inner_e:
+                    failed += 1
+                    logger.error(f"Batch insert failed for {video.file_path}: {inner_e}")
         
-        conn.commit()
         return success, failed
     
     def query_by_time_range(

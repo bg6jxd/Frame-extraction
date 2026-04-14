@@ -128,6 +128,7 @@ class VideoScanner:
         result = ScanResult()
         video_files = self._collect_video_files(directory, recursive, pattern)
         
+        result.total_files = len(video_files)
         result.video_files = len(video_files)
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:

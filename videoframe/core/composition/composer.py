@@ -108,10 +108,21 @@ class VideoComposer:
             if self.encoder_process and self.encoder_process.stdin:
                 self.encoder_process.stdin.write(frame_data)
                 self.frame_count += 1
+            else:
+                raise RuntimeError("Encoder process not available or stdin closed")
         except BrokenPipeError:
             if self.encoder_process and self.encoder_process.stderr:
                 stderr = self.encoder_process.stderr.read().decode()
                 raise RuntimeError(f"FFmpeg encoding failed: {stderr}")
+            else:
+                raise RuntimeError("FFmpeg encoding failed: broken pipe with no error output")
+        except Exception as e:
+            if self.encoder_process and self.encoder_process.poll() is not None:
+                # 进程已退出，获取错误信息
+                if self.encoder_process.stderr:
+                    stderr = self.encoder_process.stderr.read().decode()
+                    raise RuntimeError(f"FFmpeg encoder exited with error: {stderr}")
+            raise e
     
     def _finalize_encoder(self):
         """完成编码"""

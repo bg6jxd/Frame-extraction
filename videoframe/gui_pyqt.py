@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 class ScanWorker(QThread):
     """扫描工作线程"""
-    progress = pyqtSignal(str)
+    progress = pyqtSignal(int, int)  # current, total
+    file_progress = pyqtSignal(str)  # 当前处理的文件名
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
@@ -46,14 +47,26 @@ class ScanWorker(QThread):
     
     def run(self):
         try:
-            self.progress.emit("正在扫描视频文件...")
+            self.file_progress.emit("正在扫描视频文件...")
+            
+            # 自定义进度回调
+            def scan_progress(video, scan_result):
+                self.progress.emit(scan_result.successful, scan_result.video_files)
+                if video:
+                    self.file_progress.emit(f"正在处理: {video.file_name}")
+            
             result = self.index_manager.scan_and_index(
                 self.video_dir,
                 recursive=self.recursive,
                 pattern=self.pattern,
                 force_rebuild=self.force_rebuild,
+                progress_callback=scan_progress,
                 quick_mode=self.quick_mode
             )
+            
+            # 确保最终进度为100%
+            self.progress.emit(result.total_videos, result.total_videos)
+            
             self.finished.emit({
                 'total': result.total_videos,
                 'indexed': result.indexed,
@@ -61,6 +74,70 @@ class ScanWorker(QThread):
                 'errors': result.errors
             })
         except Exception as e:
+            self.error.emit(str(e))
+
+
+class PlanGenerationWorker(QThread):
+    """抽帧计划生成工作线程"""
+    progress = pyqtSignal(int, int)  # current, total
+    status = pyqtSignal(str)  # 状态信息
+    finished = pyqtSignal(dict)  # 计划信息
+    error = pyqtSignal(str)
+    
+    def __init__(self, index_manager, rule):
+        super().__init__()
+        self.index_manager = index_manager
+        self.rule = rule
+    
+    def run(self):
+        try:
+            from videoframe.core.extraction import ExtractionEngine
+            
+            self.status.emit("正在计算提取时间点...")
+            engine = ExtractionEngine(self.index_manager)
+            
+            # 先计算时间点
+            from videoframe.models import SamplingMethod
+            time_calculator = engine.time_calculator
+            
+            extraction_points = time_calculator.calculate_extraction_points(
+                self.rule.date_range,
+                self.rule.time_selection,
+                self.rule.sampling
+            )
+            
+            total_points = len(extraction_points)
+            self.status.emit(f"找到 {total_points} 个提取时间点，正在匹配视频文件...")
+            
+            # 逐个匹配视频文件并更新进度
+            frame_locations = []
+            frame_locator = engine.frame_locator
+            
+            for i, point in enumerate(extraction_points):
+                from datetime import timedelta
+                videos = self.index_manager.query_by_time_range(
+                    point.timestamp,
+                    point.timestamp + timedelta(seconds=1)
+                )
+                
+                for video in videos:
+                    location = frame_locator.locate_frame(video, point.timestamp)
+                    if location:
+                        frame_locations.append(location)
+                        break
+                
+                # 更新进度
+                self.progress.emit(i + 1, total_points)
+            
+            self.status.emit("抽帧计划生成完成！")
+            
+            self.finished.emit({
+                'total_points': total_points,
+                'total_frames': len(frame_locations),
+                'rule': self.rule.to_dict(),
+            })
+        except Exception as e:
+            logger.error(f"计划生成异常: {e}")
             self.error.emit(str(e))
 
 
@@ -173,17 +250,25 @@ class VideoFrameGUI(QMainWindow):
         self.setup_logging()
     
     def _clear_database(self):
-        """清空数据库中的历史数据"""
+        """清空数据库中的历史数据（兼容旧版本）"""
         try:
             db_path = str(Path.home() / '.videoframe' / 'index.db')
+            self._clear_database_at_path(db_path)
+        except Exception as e:
+            # 启动时数据库清空失败不应阻断应用运行
+            logger.warning(f"Failed to clear database: {e}")
+    
+    def _clear_database_at_path(self, db_path: str):
+        """清空指定路径的数据库"""
+        try:
             if Path(db_path).exists():
                 from videoframe.core.index.database import Database
                 db = Database(db_path)
                 db.clear_all()
                 db.close()
-                logger.info("Database cleared on startup")
+                logger.info(f"Database cleared: {db_path}")
         except Exception as e:
-            logger.warning(f"Failed to clear database: {e}")
+            logger.warning(f"Failed to clear database at {db_path}: {e}")
     
     def init_ui(self):
         """初始化界面"""
@@ -605,9 +690,9 @@ class VideoFrameGUI(QMainWindow):
         # 操作按钮
         btn_layout = QHBoxLayout()
         
-        preview_btn = QPushButton("👀 预览抽帧计划")
+        preview_btn = QPushButton("📋 生成抽帧计划")
         preview_btn.setStyleSheet("background-color: #95a5a6;")
-        preview_btn.clicked.connect(self.preview_extraction)
+        preview_btn.clicked.connect(self.generate_plan)
         
         extract_btn = QPushButton("🎯 执行抽帧任务")
         extract_btn.clicked.connect(self.execute_extraction)
@@ -727,7 +812,7 @@ class VideoFrameGUI(QMainWindow):
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet("font-family: Consolas, Monaco, monospace; font-size: 12px;")
+        self.log_text.setStyleSheet("font-family: Monaco, Menlo, 'Courier New', monospace; font-size: 12px;")
         log_layout.addWidget(self.log_text)
         
         log_group.setLayout(log_layout)
@@ -797,8 +882,11 @@ class VideoFrameGUI(QMainWindow):
             return
         
         # 初始化索引管理器（使用视频目录下的数据库）
-        video_dir = self.video_dir_edit.text()
         db_path = str(Path(video_dir).resolve() / '.videoframe' / 'index.db')
+        
+        # 清空视频目录对应的数据库，避免历史数据混杂
+        self._clear_database_at_path(db_path)
+        
         self.index_manager = VideoIndexManager(db_path)
         
         # 创建工作线程
@@ -810,17 +898,28 @@ class VideoFrameGUI(QMainWindow):
             self.quick_mode_check.isChecked()
         )
         
-        self.current_worker.progress.connect(self.on_scan_progress)
+        self.current_worker.progress.connect(self.on_scan_progress_bar)
+        self.current_worker.file_progress.connect(self.on_scan_progress)
         self.current_worker.finished.connect(self.on_scan_finished)
         self.current_worker.error.connect(self.on_worker_error)
         self.current_worker.start()
         
         self.task_label.setText("正在扫描视频文件...")
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("0%")
         self.statusBar().showMessage("正在扫描视频文件...")
     
     def on_scan_progress(self, message):
-        """扫描进度更新"""
+        """扫描进度更新（文件信息）"""
         self.task_label.setText(message)
+    
+    def on_scan_progress_bar(self, current, total):
+        """扫描进度条更新"""
+        if total <= 0:
+            return
+        progress = int((current / total) * 100)
+        self.progress_bar.setValue(progress)
+        self.progress_label.setText(f"{progress}% ({current}/{total})")
     
     def on_scan_finished(self, result):
         """扫描完成"""
@@ -893,40 +992,64 @@ class VideoFrameGUI(QMainWindow):
         if stats['latest_time']:
             self.index_text.append(f"最晚时间: {stats['latest_time']}")
     
-    def preview_extraction(self):
-        """预览抽帧计划"""
+    def generate_plan(self):
+        """生成抽帧计划（带进度显示）"""
         if not self.index_manager:
             QMessageBox.information(self, "提示", "请先扫描视频文件")
             return
         
         try:
             rule = self._create_extraction_rule()
-            engine = ExtractionEngine(self.index_manager)
-            preview = engine.preview_extraction(rule)
-            
-            # 安全获取预览信息
-            date_range = preview.get('date_range', {})
-            time_selection = preview.get('time_selection', {})
-            sampling = preview.get('sampling', {})
-            
-            dr_start = date_range.get('start', '未设置') or '未设置'
-            dr_end = date_range.get('end', '未设置') or '未设置'
-            ts_start = time_selection.get('start', '未设置') or '未设置'
-            ts_end = time_selection.get('end', '未设置') or '未设置'
-            method = sampling.get('method', '未设置') or '未设置'
-            interval = sampling.get('interval', '未设置') or '未设置'
-            
-            QMessageBox.information(
-                self,
-                "抽帧计划预览",
-                f"总提取点: {preview['total_points']}\n"
-                f"总帧数: {preview['total_frames']}\n\n"
-                f"日期范围: {dr_start} ~ {dr_end}\n"
-                f"时间段: {ts_start} ~ {ts_end}\n"
-                f"采样方式: {method} (间隔: {interval})"
-            )
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"预览失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"规则配置错误: {str(e)}")
+            return
+        
+        # 重置进度条
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("0%")
+        
+        # 创建计划生成工作线程
+        self.current_worker = PlanGenerationWorker(self.index_manager, rule)
+        
+        self.current_worker.progress.connect(self.on_plan_progress)
+        self.current_worker.status.connect(self.on_plan_status)
+        self.current_worker.finished.connect(self.on_plan_finished)
+        self.current_worker.error.connect(self.on_worker_error)
+        self.current_worker.start()
+        
+        self.task_label.setText("正在生成抽帧计划...")
+        self.statusBar().showMessage("正在生成抽帧计划...")
+    
+    def on_plan_progress(self, current, total):
+        """计划生成进度更新"""
+        if total <= 0:
+            return
+        progress = int((current / total) * 100)
+        self.progress_bar.setValue(progress)
+        self.progress_label.setText(f"{progress}% ({current}/{total})")
+    
+    def on_plan_status(self, message):
+        """计划生成状态更新"""
+        self.task_label.setText(message)
+    
+    def on_plan_finished(self, plan_info):
+        """计划生成完成"""
+        total_points = plan_info['total_points']
+        total_frames = plan_info['total_frames']
+        
+        self.log_message(f"抽帧计划生成完成: {total_points} 个提取点, {total_frames} 帧可提取")
+        
+        # 显示计划详情
+        QMessageBox.information(
+            self,
+            "抽帧计划生成完成",
+            f"总提取点: {total_points}\n"
+            f"可提取帧: {total_frames}\n\n"
+            f"{'✅ 可以执行抽帧任务' if total_frames > 0 else '⚠️ 没有找到符合条件的视频帧'}"
+        )
+        
+        self.task_label.setText("计划生成完成")
+        self.statusBar().showMessage(f"抽帧计划已生成: {total_frames} 帧可提取")
     
     def execute_extraction(self):
         """执行抽帧任务"""
@@ -1046,14 +1169,14 @@ class VideoFrameGUI(QMainWindow):
     def _create_extraction_rule(self):
         """创建抽帧规则"""
         # 从日期选择器获取日期
-        if not self.start_date_edit.isEnabled() or not self.end_date_edit.isEnabled():
+        if not self.index_manager:
             raise ValueError("请先扫描视频文件以设置日期范围")
         
         start_qdate = self.start_date_edit.date()
         end_qdate = self.end_date_edit.date()
         
-        start_date = datetime(start_qdate.year(), start_qdate.month(), start_qdate.day()).date()
-        end_date = datetime(end_qdate.year(), end_qdate.month(), end_qdate.day()).date()
+        start_date = start_qdate.toPyDate()
+        end_date = end_qdate.toPyDate()
         
         # 解析时间
         try:

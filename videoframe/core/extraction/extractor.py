@@ -38,13 +38,16 @@ class FrameExtractor:
         output_path = os.path.join(self.output_dir, output_filename)
         
         try:
-            # 优化FFmpeg命令：使用快速seek，禁用不必要的处理
+            # FFmpeg q:v 范围是 2-31（JPEG），2 最高质量，31 最低
+            # 将 1-100 质量映射到 2-31
+            q_value = max(2, min(31, 31 - int(quality * 29 / 100)))
+            
             cmd = [
                 'ffmpeg',
                 '-ss', str(location.time_offset),  # 在输入前seek，速度更快
                 '-i', location.video_file.file_path,
                 '-vframes', '1',
-                '-q:v', str(31 - int(quality * 30 / 100)),
+                '-q:v', str(q_value),
                 '-threads', '1',  # 单帧提取使用单线程
                 '-preset', 'ultrafast',  # 最快预设
                 '-y',
