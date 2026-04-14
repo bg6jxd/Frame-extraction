@@ -26,7 +26,8 @@ class Database:
     def _get_connection(self) -> sqlite3.Connection:
         """获取或创建数据库连接（复用）"""
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
+            # check_same_thread=False 允许连接在不同线程间共享（GUI主线程创建工作线程场景）
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
