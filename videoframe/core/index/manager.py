@@ -2,7 +2,7 @@
 视频索引管理器
 """
 import logging
-from typing import List, Optional
+from typing import List, Optional, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -65,6 +65,9 @@ class CoverageReport:
 class VideoIndexManager:
     """视频索引管理器"""
     
+    # 批量插入的批次大小
+    BATCH_SIZE = 100
+    
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
             db_path = str(Path.home() / '.videoframe' / 'index.db')
@@ -76,8 +79,9 @@ class VideoIndexManager:
         self,
         directory: str,
         recursive: bool = True,
+        pattern: Optional[str] = None,
         force_rebuild: bool = False,
-        progress_callback=None,
+        progress_callback: Optional[Callable] = None,
         quick_mode: bool = True
     ) -> IndexResult:
         """扫描并索引视频目录
@@ -85,6 +89,7 @@ class VideoIndexManager:
         Args:
             directory: 视频目录路径
             recursive: 是否递归扫描子目录
+            pattern: 文件名匹配模式
             force_rebuild: 是否强制重建索引
             progress_callback: 进度回调函数
             quick_mode: 快速模式，仅解析文件名，不读取文件内容
@@ -96,19 +101,33 @@ class VideoIndexManager:
             logger.info("Force rebuild index, clearing existing data...")
             self.db.clear_all()
         
-        videos = list(self.scanner.scan_directory(directory, recursive=recursive, quick_mode=quick_mode))
-        result.total_videos = len(videos)
+        # 使用扫描器的批量扫描方法
+        scan_result = self.scanner.scan_directory_batch(
+            directory,
+            recursive=recursive,
+            pattern=pattern,
+            progress_callback=progress_callback,
+            quick_mode=quick_mode
+        )
         
-        for video in videos:
-            try:
-                self.db.insert_video(video)
-                result.indexed += 1
-                
-                if progress_callback:
-                    progress_callback(video, result)
-            except Exception as e:
-                result.failed += 1
-                result.errors.append(f"{video.file_path}: {str(e)}")
+        result.total_videos = scan_result.video_files
+        result.failed = scan_result.failed
+        result.errors = scan_result.errors
+        
+        # 收集所有扫描到的视频并批量插入
+        videos = list(self.scanner.scan_directory(
+            directory,
+            recursive=recursive,
+            pattern=pattern,
+            quick_mode=quick_mode
+        ))
+        
+        # 批量插入
+        for i in range(0, len(videos), self.BATCH_SIZE):
+            batch = videos[i:i + self.BATCH_SIZE]
+            success, failed = self.db.insert_videos_batch(batch)
+            result.indexed += success
+            result.failed += failed
         
         logger.info(f"Index completed: {result.indexed}/{result.total_videos} videos indexed")
         
@@ -120,13 +139,12 @@ class VideoIndexManager:
         result = IndexResult()
         result.total_videos = len(videos)
         
-        for video in videos:
-            try:
-                self.db.insert_video(video)
-                result.indexed += 1
-            except Exception as e:
-                result.failed += 1
-                result.errors.append(f"{video.file_path}: {str(e)}")
+        # 批量插入
+        for i in range(0, len(videos), self.BATCH_SIZE):
+            batch = videos[i:i + self.BATCH_SIZE]
+            success, failed = self.db.insert_videos_batch(batch)
+            result.indexed += success
+            result.failed += failed
         
         return result
     
@@ -197,3 +215,7 @@ class VideoIndexManager:
     def get_video_by_path(self, file_path: str) -> Optional[VideoFile]:
         """根据路径获取视频"""
         return self.db.get_video_by_path(file_path)
+    
+    def close(self):
+        """关闭数据库连接"""
+        self.db.close()

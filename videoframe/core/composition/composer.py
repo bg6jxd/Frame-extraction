@@ -133,10 +133,20 @@ class VideoComposer:
         pattern: str = "*.jpg",
         progress_callback=None
     ) -> CompositionResult:
-        """从目录合成视频"""
+        """从目录合成视频
+        
+        Args:
+            directory: 包含帧的目录
+            output_path: 输出视频路径
+            pattern: 文件匹配模式（如 *.jpg, *.png）
+            progress_callback: 进度回调
+        """
         
         dir_path = Path(directory)
         frame_files = sorted(dir_path.glob(pattern))
+        
+        if not frame_files:
+            raise ValueError(f"No frames found matching pattern '{pattern}' in {directory}")
         
         frames = []
         for i, file_path in enumerate(frame_files):

@@ -49,6 +49,35 @@ class VideoScanner:
         self.max_workers = max_workers
         self.metadata_extractor = MetadataExtractor()
     
+    def _collect_video_files(
+        self,
+        directory: str,
+        recursive: bool = True,
+        pattern: Optional[str] = None
+    ) -> List[Path]:
+        """收集目录中的视频文件路径
+        
+        Args:
+            directory: 目录路径
+            recursive: 是否递归扫描
+            pattern: 文件名匹配模式
+        
+        Returns:
+            视频文件路径列表
+        """
+        dir_path = Path(directory).resolve()
+        video_files = []
+        
+        iterator = dir_path.rglob('*') if recursive else dir_path.glob('*')
+        
+        for file_path in iterator:
+            if file_path.is_file() and is_video_file(str(file_path)):
+                if pattern and pattern not in file_path.name:
+                    continue
+                video_files.append(file_path.resolve())
+        
+        return video_files
+    
     def scan_directory(
         self,
         directory: str,
@@ -65,28 +94,18 @@ class VideoScanner:
             quick_mode: 快速模式，仅解析文件名，不读取文件内容
         """
         
-        dir_path = Path(directory).resolve()
+        video_files = self._collect_video_files(directory, recursive, pattern)
         
-        if recursive:
-            file_paths = dir_path.rglob('*')
-        else:
-            file_paths = dir_path.glob('*')
-        
-        for file_path in file_paths:
-            if file_path.is_file() and is_video_file(str(file_path)):
-                if pattern and pattern not in file_path.name:
-                    continue
-                
-                try:
-                    # 使用绝对路径
-                    abs_path = str(file_path.resolve())
-                    if quick_mode:
-                        video = self.metadata_extractor.quick_extract(abs_path)
-                    else:
-                        video = self.metadata_extractor.extract(abs_path)
-                    yield video
-                except Exception as e:
-                    logger.error(f"Failed to extract metadata from {file_path}: {e}")
+        for file_path in video_files:
+            try:
+                abs_path = str(file_path)
+                if quick_mode:
+                    video = self.metadata_extractor.quick_extract(abs_path)
+                else:
+                    video = self.metadata_extractor.extract(abs_path)
+                yield video
+            except Exception as e:
+                logger.error(f"Failed to extract metadata from {file_path}: {e}")
     
     def scan_directory_batch(
         self,
@@ -107,28 +126,9 @@ class VideoScanner:
         """
         
         result = ScanResult()
-        dir_path = Path(directory).resolve()
+        video_files = self._collect_video_files(directory, recursive, pattern)
         
-        all_files = []
-        
-        if recursive:
-            for file_path in dir_path.rglob('*'):
-                if file_path.is_file():
-                    result.total_files += 1
-                    if is_video_file(str(file_path)):
-                        if pattern and pattern not in file_path.name:
-                            continue
-                        all_files.append(file_path.resolve())
-                        result.video_files += 1
-        else:
-            for file_path in dir_path.glob('*'):
-                if file_path.is_file():
-                    result.total_files += 1
-                    if is_video_file(str(file_path)):
-                        if pattern and pattern not in file_path.name:
-                            continue
-                        all_files.append(file_path.resolve())
-                        result.video_files += 1
+        result.video_files = len(video_files)
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
@@ -136,7 +136,7 @@ class VideoScanner:
                     self.metadata_extractor.quick_extract if quick_mode else self.metadata_extractor.extract,
                     str(fp)
                 ): fp
-                for fp in all_files
+                for fp in video_files
             }
             
             for future in as_completed(futures):
