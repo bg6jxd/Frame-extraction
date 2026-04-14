@@ -83,8 +83,10 @@ class ExtractionWorker(QThread):
             plan = engine.create_extraction_plan(self.rule)
             
             if not plan.frame_locations:
-                self.error.emit("没有找到符合条件的视频帧")
+                self.error.emit("没有找到符合条件的视频帧，请检查日期和时间范围设置")
                 return
+            
+            logger.info(f"准备提取 {len(plan.frame_locations)} 帧，输出到 {self.output_dir}")
             
             # 使用并行批量提取
             extractor = FrameExtractor(self.output_dir, max_workers=self.max_workers)
@@ -93,14 +95,18 @@ class ExtractionWorker(QThread):
             def progress_callback(current, total_count):
                 self.progress.emit(current, total_count)
             
-            frames = extractor.extract_from_plan(
-                plan,
+            frames = extractor.extract_batch(
+                plan.frame_locations,
+                output_format=self.rule.output.format if self.rule.output else "jpg",
+                quality=self.rule.output.quality if self.rule.output else 95,
                 max_workers=self.max_workers,
                 progress_callback=progress_callback
             )
             
+            logger.info(f"提取完成: {len(frames)}/{total} 帧成功")
             self.finished.emit(len(frames))
         except Exception as e:
+            logger.error(f"抽帧异常: {e}")
             self.error.emit(str(e))
 
 
@@ -110,13 +116,14 @@ class CompositionWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, frames_dir, output_file, fps, resolution, codec):
+    def __init__(self, frames_dir, output_file, fps, resolution, codec, frame_format="jpg"):
         super().__init__()
         self.frames_dir = frames_dir
         self.output_file = output_file
         self.fps = fps
         self.resolution = resolution
         self.codec = codec
+        self.frame_format = frame_format
     
     def run(self):
         try:
@@ -129,17 +136,14 @@ class CompositionWorker(QThread):
             
             composer = VideoComposer(config)
             
-            frames_path = Path(self.frames_dir)
-            frame_files = list(frames_path.glob('*.jpg'))
-            total = len(frame_files)
-            
-            def progress_callback(current, total_frames):
-                self.progress.emit(current, total_frames)
+            pattern = f'*.{self.frame_format}'
+            logger.info(f"开始合成视频，从 {self.frames_dir} 读取 {pattern} 文件")
             
             result = composer.compose_from_directory(
                 self.frames_dir,
                 self.output_file,
-                progress_callback=progress_callback
+                pattern=pattern,
+                progress_callback=lambda c, t: self.progress.emit(c, t)
             )
             
             self.finished.emit({
@@ -149,6 +153,7 @@ class CompositionWorker(QThread):
                 'file_size': result.file_size
             })
         except Exception as e:
+            logger.error(f"合成异常: {e}")
             self.error.emit(str(e))
 
 
@@ -664,6 +669,11 @@ class VideoFrameGUI(QMainWindow):
         self.codec_combo.addItems(["h264", "h265", "vp9", "av1"])
         video_layout.addWidget(self.codec_combo, 3, 1)
         
+        video_layout.addWidget(QLabel("帧文件格式："), 4, 0)
+        self.frame_format_combo = QComboBox()
+        self.frame_format_combo.addItems(["jpg", "png", "bmp"])
+        video_layout.addWidget(self.frame_format_combo, 4, 1)
+        
         video_group.setLayout(video_layout)
         layout.addWidget(video_group)
         
@@ -894,14 +904,26 @@ class VideoFrameGUI(QMainWindow):
             engine = ExtractionEngine(self.index_manager)
             preview = engine.preview_extraction(rule)
             
+            # 安全获取预览信息
+            date_range = preview.get('date_range', {})
+            time_selection = preview.get('time_selection', {})
+            sampling = preview.get('sampling', {})
+            
+            dr_start = date_range.get('start', '未设置') or '未设置'
+            dr_end = date_range.get('end', '未设置') or '未设置'
+            ts_start = time_selection.get('start', '未设置') or '未设置'
+            ts_end = time_selection.get('end', '未设置') or '未设置'
+            method = sampling.get('method', '未设置') or '未设置'
+            interval = sampling.get('interval', '未设置') or '未设置'
+            
             QMessageBox.information(
                 self,
                 "抽帧计划预览",
                 f"总提取点: {preview['total_points']}\n"
                 f"总帧数: {preview['total_frames']}\n\n"
-                f"日期范围: {preview['date_range']['start']} ~ {preview['date_range']['end']}\n"
-                f"时间段: {preview['time_selection']['start']} ~ {preview['time_selection']['end']}\n"
-                f"采样间隔: {preview['sampling']['interval']}"
+                f"日期范围: {dr_start} ~ {dr_end}\n"
+                f"时间段: {ts_start} ~ {ts_end}\n"
+                f"采样方式: {method} (间隔: {interval})"
             )
         except Exception as e:
             QMessageBox.critical(self, "错误", f"预览失败: {str(e)}")
@@ -946,6 +968,8 @@ class VideoFrameGUI(QMainWindow):
     
     def on_extraction_progress(self, current, total):
         """抽帧进度更新"""
+        if total <= 0:
+            return
         progress = int((current / total) * 100)
         self.progress_bar.setValue(progress)
         self.progress_label.setText(f"{progress}% ({current}/{total})")
@@ -974,13 +998,17 @@ class VideoFrameGUI(QMainWindow):
         resolution_str = self.resolution_combo.currentText()
         width, height = map(int, resolution_str.split('x'))
         
+        # 获取帧格式
+        frame_format = self.frame_format_combo.currentText()
+        
         # 创建工作线程
         self.current_worker = CompositionWorker(
             frames_dir,
             output_file,
             self.fps_spin.value(),
             (width, height),
-            self.codec_combo.currentText()
+            self.codec_combo.currentText(),
+            frame_format
         )
         
         self.current_worker.progress.connect(self.on_composition_progress)
@@ -993,6 +1021,8 @@ class VideoFrameGUI(QMainWindow):
     
     def on_composition_progress(self, current, total):
         """合成进度更新"""
+        if total <= 0:
+            return
         progress = int((current / total) * 100)
         self.progress_bar.setValue(progress)
         self.progress_label.setText(f"{progress}% ({current}/{total})")
