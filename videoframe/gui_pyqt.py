@@ -35,13 +35,14 @@ class ScanWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, index_manager, video_dir, recursive, force_rebuild, quick_mode=True):
+    def __init__(self, index_manager, video_dir, recursive, force_rebuild, quick_mode=True, pattern=None):
         super().__init__()
         self.index_manager = index_manager
         self.video_dir = video_dir
         self.recursive = recursive
         self.force_rebuild = force_rebuild
         self.quick_mode = quick_mode
+        self.pattern = pattern
     
     def run(self):
         try:
@@ -49,6 +50,7 @@ class ScanWorker(QThread):
             result = self.index_manager.scan_and_index(
                 self.video_dir,
                 recursive=self.recursive,
+                pattern=self.pattern,
                 force_rebuild=self.force_rebuild,
                 quick_mode=self.quick_mode
             )
@@ -168,11 +170,12 @@ class VideoFrameGUI(QMainWindow):
     def _clear_database(self):
         """清空数据库中的历史数据"""
         try:
-            db_path = str(Path.cwd() / '.videoframe' / 'index.db')
+            db_path = str(Path.home() / '.videoframe' / 'index.db')
             if Path(db_path).exists():
                 from videoframe.core.index.database import Database
                 db = Database(db_path)
                 db.clear_all()
+                db.close()
                 logger.info("Database cleared on startup")
         except Exception as e:
             logger.warning(f"Failed to clear database: {e}")
@@ -783,8 +786,9 @@ class VideoFrameGUI(QMainWindow):
             QMessageBox.critical(self, "错误", "视频目录不存在")
             return
         
-        # 初始化索引管理器
-        db_path = str(Path.cwd() / '.videoframe' / 'index.db')
+        # 初始化索引管理器（使用视频目录下的数据库）
+        video_dir = self.video_dir_edit.text()
+        db_path = str(Path(video_dir).resolve() / '.videoframe' / 'index.db')
         self.index_manager = VideoIndexManager(db_path)
         
         # 创建工作线程
@@ -1077,6 +1081,18 @@ class VideoFrameGUI(QMainWindow):
     def clear_log(self):
         """清空日志"""
         self.log_text.clear()
+    
+    def closeEvent(self, event):
+        """窗口关闭时清理资源"""
+        if self.index_manager:
+            try:
+                self.index_manager.close()
+            except Exception as e:
+                logger.warning(f"Failed to close database: {e}")
+        if self.current_worker and self.current_worker.isRunning():
+            self.current_worker.terminate()
+            self.current_worker.wait()
+        super().closeEvent(event)
     
     @staticmethod
     def format_size(size_bytes):
